@@ -11,6 +11,8 @@ This fork includes:
 * Windows and macOS packaging scripts for building standalone executables.
 * A PyInstaller specification that includes CZI-reading support.
 
+For detailed recommendations on choosing settings and validating results, see the [Best Settings and Results Guide](BEST_SETTINGS.md).
+
 ## Recommended image settings
 
 The defaults are optimized for confocal microscopy images with vessels approximately 10 pixels in diameter. Use these values as a starting point and validate the resulting segmentation overlay against representative images:
