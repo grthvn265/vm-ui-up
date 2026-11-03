@@ -1,0 +1,8 @@
+numpy
+scipy
+scikit-image
+opencv-python
+matplotlib
+# reading .czi files (aicsimageio[czi] also works when installed)
+czifile
+imagecodecs

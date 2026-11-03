@@ -1,0 +1,43 @@
+# Builds the single-file executables on GitHub's Windows and macOS machines.
+# Run it from the Actions tab ("Run workflow"); the executables are attached
+# to the run as downloadable artifacts.
+name: build executables
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: VesselMetrics-windows
+          - os: macos-latest   # Apple silicon
+            artifact: VesselMetrics-macos-arm64
+          - os: macos-13       # Intel
+            artifact: VesselMetrics-macos-x86_64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller
+      - name: Build
+        run: python -m PyInstaller --noconfirm --clean vm_UI.spec
+      - name: Smoke test (analysis code runs with the installed packages)
+        shell: bash
+        run: |
+          python -c "import vm_UI, numpy as np; print(vm_UI.segment_image(np.random.default_rng(0).integers(0, 255, (128, 128)).astype(np.uint8)).shape)"
+          ls -l dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/VesselMetrics*
