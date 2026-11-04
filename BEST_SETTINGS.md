@@ -26,10 +26,29 @@ Enter these values in the graphical interface:
 | Sigma 2 | `10 20 5` |
 | Hole size | `50` |
 | Ditzle size | `500` |
-| Preprocess | `yes` |
+| Image type | your choice (required), see below |
 | Multi scale | `no` |
 
 This preset is appropriate when vessels have broadly similar widths and reasonable contrast.
+
+## Choosing the image type and photo preprocessing
+
+Choose the image type before anything else, then press **Check image...** to confirm it: the software labels the image and previews each step.
+
+* **Normal photo** (e.g. a yolk-sac photo with dark red vessels): inverted first, then processed.
+* **Inverted / fluorescence**: bright vessels on a dark background.
+* **Pre-processed**: already background-corrected; the built-in preprocessing is skipped.
+
+Suggested starting point for colour photos of a sample cropped to a dark or white oval:
+
+```text
+Colour channel: green
+Local contrast boost (CLAHE): on
+Remove dark specks, radius: 6
+Mask the area outside the sample: on
+```
+
+On the provided sample photo these four options raised vessel coverage from 8.7% to about 11% of the image: CLAHE recovered fine branches, speck removal reconnected vessels broken by debris, and the outside mask removed false vessels along the cropped edge. Keep the speck radius below half the gap between neighbouring vessels, or nearby vessels can merge.
 
 ## Choosing a filter
 
@@ -104,7 +123,7 @@ Threshold: 30-40
 Sigma 1: 1 8 1
 Hole size: 50
 Ditzle size: 250
-Preprocess: yes
+Image type: as appropriate
 Multi scale: no
 ```
 
@@ -118,7 +137,7 @@ Threshold: 50-70
 Sigma 1: 1 8 1
 Hole size: 50
 Ditzle size: 500-1000
-Preprocess: yes
+Image type: as appropriate
 Multi scale: no
 ```
 
@@ -133,7 +152,7 @@ Sigma 1: 1 8 1
 Sigma 2: 10 30 5
 Hole size: 50
 Ditzle size: 250-500
-Preprocess: yes
+Image type: as appropriate
 Multi scale: yes
 ```
 
@@ -175,7 +194,10 @@ Once settings are satisfactory:
 
 | Problem | First adjustment |
 | --- | --- |
-| Faint vessels are missing | Lower threshold; try `jerman` for dim data |
+| Wrong structures are traced, vessels missed entirely | Check the image type (normal photos must be inverted) |
+| Faint vessels are missing | Lower threshold; try `jerman` for dim data, or enable CLAHE |
+| Vessels are broken by dust or debris | Set Remove dark specks to 4-6 |
+| The sample edge is labelled as a vessel | Enable Mask the area outside the sample |
 | Too much background is labelled | Raise threshold |
 | Small real branches disappear | Lower ditzle size |
 | Many isolated speckles remain | Raise threshold, then increase ditzle size |

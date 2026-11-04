@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 
 from .logs import log
-from .segmentation import normalize_contrast
+from .segmentation import normalize_contrast, prepare_image
 
 
 def reslice_image(image, thickness):
@@ -112,7 +112,23 @@ def preprocess_czi(input_directory, file_name, channel=0):
     return normalize_contrast(data), out_dims
 
 
-def load_images(files, czi_options, progress=log):
+def read_image(path, image_type=None, colour_channel="grayscale"):
+    """Read one image file as the single-channel image to analyze, or None.
+
+    For normal photos, and when a colour channel is picked, the file is read in
+    colour so the inversion comes first, before any other change.
+    """
+    if image_type != "normal" and colour_channel == "grayscale":
+        return cv2.imread(path, 0)
+    raw = cv2.imread(path, cv2.IMREAD_COLOR)
+    if raw is None:
+        return None
+    return prepare_image(raw, image_type, colour_channel)
+
+
+def load_images(
+    files, czi_options, progress=log, image_type=None, colour_channel="grayscale"
+):
     """Read every file into memory; returns (images, names)."""
     images, names = [], []
     for path in files:
@@ -124,10 +140,10 @@ def load_images(files, czi_options, progress=log):
             thickness = min(thickness, volume.shape[0])
             reslice = reslice_image(volume, thickness)
             for i in range(reslice.shape[0]):
-                images.append(reslice[i])
+                images.append(prepare_image(reslice[i], image_type))
                 names.append("%s_slice%d" % (base, i))
         else:
-            im = cv2.imread(path, 0)
+            im = read_image(path, image_type, colour_channel)
             if im is None:
                 progress("skipping %s (could not be read as an image)" % path)
                 continue

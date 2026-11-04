@@ -25,7 +25,7 @@ The defaults are optimized for confocal microscopy images with vessels approxima
 | Sigma 2 | `10 20 5` |
 | Hole size | `50` |
 | Ditzle size | `500` |
-| Preprocess | `yes` |
+| Image type | your choice (required), see below |
 | Multi scale | `no` |
 
 Adjust the threshold first: lower it when faint vessels are missing and raise it when background noise is included. Use `jerman` for dim or low-contrast images. Enable multi-scale processing when the image contains both microvasculature and substantially larger vessels. The sigma ranges should match the vessel widths in pixels; overly large sigma values can overestimate vessel boundaries.
@@ -274,9 +274,17 @@ The second sigma parameter is only used for multi scale processing, if your imag
 * Hole size and Ditzle size
 
 Accepted inputs are integers. Small holes (area less than the specified value) are closed in large binary objects post segmentation. Ditzle size removes binary objects less than the specified size. The 'ditzles' are usually partially formed vessels or vessels with poor signal along the periphery of the image.
-* Preprocess
+* Image type (required)
 
-Whether to preprocess the data. If you've applied your own preprocessing prior to loading vessel metrics select no. Preprocessing picks up at vessel enhancement. 
+Vessel metrics finds bright vessels on a dark background, so the image type must be chosen before running (Run analysis stays disabled until it is):
+  * Normal photo: dark vessels on a light background. The photo is inverted first, on the untouched colour image, before any other preprocessing.
+  * Inverted / fluorescence: bright vessels already; used as it is.
+  * Pre-processed: you applied your own preprocessing; the vessel metrics preprocessing is skipped and processing picks up at vessel enhancement (this replaces the former Preprocess option).
+
+Check image... labels the selected image (or the first image of a folder) as normal, inverted or pre-processed, explains why, and previews every step with the current settings. The suggestion is only applied when you press its Use button.
+* Colour channel, CLAHE, dark specks and outside mask
+
+Colour channel picks what a colour photo is reduced to (green usually gives the best vessel contrast). CLAHE boosts local contrast to recover faint small vessels. Remove dark specks fills dust or debris up to the given radius so it does not break vessels apart (0 = off). Mask the area outside the sample ignores the black or white surround of a cropped photo. All are off by default, so existing settings give the same results as before.
 * Multi scale
 
 Whether to do a multi scale enhancement. Useful if there is a large discrepancy in vessel size within your image. 
@@ -286,7 +294,7 @@ Vessel metrics operates on czi files and image files (tif, png, etc). If you are
 
 You can select which channel is used for the analysis. These are integers beginning with 0 (your first channel is channel 0). You may also select how many slices are used to create a z projection. If you select a value less than the total slices in your czi multiple slices will be created and analyzed. 
 #### UI Output
-A directory is created for each sample analyzed. Within each directory. An unprocessed z proejction is saved as img.png. The vessel segmentation is saved as label.png. 
+A directory is created for each sample analyzed. Within each directory. An unprocessed z proejction is saved as img.png. The vessel segmentation is saved as label.png. image_check.png shows the analyzed image, the preprocessed image and the segmentation side by side, each labelled with the image type and preprocessing steps used. 
 
 Vessel_labels.png overlays the vessel skeleton and segment numbers on the vessel label. If for example you wanted to know the diameter of a particularly large vessel you would open the vessel labels image and find the associated segment number and then find that entry in the vessel_diameters.txt file. 
 

@@ -20,7 +20,14 @@ from .measurements import (
     vessel_density_roi,
     vessel_length,
 )
-from .segmentation import overlay_segmentation
+from .segmentation import (
+    IMAGE_TYPE_LABELS,
+    classify_image_type,
+    invert_image,
+    overlay_segmentation,
+    prepare_image,
+    preprocess_for_segmentation,
+)
 from .settings import (
     _parse_int,
     _sigma_text,
@@ -194,6 +201,129 @@ def parameter_analysis_roi(im, seg, params, output_path, file_name, r):
     log("  ROI results for %s saved in %s" % (file_name, folder))
 
 
+def _preprocessing_text(settings):
+    if not settings.get("preprocess", True):
+        return "no preprocessing (already pre-processed)"
+    steps = []
+    if settings.get("mask outside"):
+        steps.append("outside masked")
+    if settings.get("speck size"):
+        steps.append("specks r%d" % settings["speck size"])
+    if settings.get("clahe"):
+        steps.append("CLAHE")
+    return ", ".join(steps + ["top hat, median, stretch"])
+
+
+def preprocessing_steps(im, settings, seg=None):
+    """[(label, image)] for the analyzed image, what the filter sees and the
+    segmentation, used for the labelled image_check.png."""
+    pre, _ = preprocess_for_segmentation(
+        im,
+        settings.get("preprocess", True),
+        settings.get("clahe", False),
+        settings.get("speck size", 0),
+        settings.get("mask outside", False),
+    )
+    kind = settings.get("image type")
+    steps = [
+        ("Analyzed image\n%s" % (IMAGE_TYPE_LABELS.get(kind, "image type not set")
+                                  + (", inverted" if kind == "normal" else "")), im),
+        ("Preprocessed\n%s" % _preprocessing_text(settings), pre),
+    ]
+    if seg is not None:
+        steps.append(("Segmentation\n%.1f%% of the image" % (100.0 * np.mean(seg > 0)),
+                      segmentation_overlay(im, seg)))
+    return steps
+
+
+def segmentation_overlay(im, seg):
+    """Analyzed image in gray with the segmentation in red (BGR uint8)."""
+    out = cv2.cvtColor(to_uint8(im), cv2.COLOR_GRAY2BGR)
+    red = out.copy()
+    red[seg > 0] = (40, 40, 230)
+    return cv2.addWeighted(out, 0.45, red, 0.55, 0)
+
+
+def labelled_panels(steps, panel_width=400):
+    """Place [(label, image)] side by side, each with its label written above
+    it; returns a BGR uint8 image."""
+    panels = []
+    for text, image in steps:
+        image = np.asarray(image)
+        image = image if image.ndim == 3 else cv2.cvtColor(to_uint8(image), cv2.COLOR_GRAY2BGR)
+        image = to_uint8(image) if image.dtype != np.uint8 else image
+        h, w = image.shape[:2]
+        image = cv2.resize(image, (panel_width, max(1, round(h * panel_width / w))),
+                           interpolation=cv2.INTER_AREA)
+        title, _, detail = text.partition("\n")
+        lines = [(title, 0.5, 2)] + [(line, 0.4, 1) for line in
+                                     _wrap(detail, 0.4, panel_width - 12)]
+        banner = np.full((14 + 20 * len(lines), panel_width, 3), 255, np.uint8)
+        for i, (line, size, weight) in enumerate(lines):
+            cv2.putText(banner, line, (6, 20 + 20 * i), cv2.FONT_HERSHEY_SIMPLEX,
+                        size, (20, 20, 20), weight, cv2.LINE_AA)
+        panels.append(np.vstack([banner, image]))
+    height = max(p.shape[0] for p in panels)
+    gap = np.full((height, 8, 3), 255, np.uint8)
+    row = []
+    for p in panels:
+        pad = np.full((height - p.shape[0], panel_width, 3), 255, np.uint8)
+        row += [np.vstack([p, pad]), gap]
+    return np.hstack(row[:-1])
+
+
+def _wrap(text, scale, width):
+    """Split text into lines that fit width pixels when drawn by cv2.putText."""
+    lines, line = [], ""
+    for word in text.split():
+        trial = (line + " " + word).strip()
+        if line and cv2.getTextSize(trial, cv2.FONT_HERSHEY_SIMPLEX, scale, 1)[0][0] > width:
+            lines.append(line)
+            trial = word
+        line = trial
+    return lines + [line] if line else lines
+
+
+def check_image(path, settings, czi_options=None):
+    """The image checker: label an input file's type and show every step.
+
+    Returns (suggested image type or None, reason, [(label, image)] steps).
+    The steps use the image type in settings, or the suggestion when the user
+    has not chosen one yet.
+    """
+    if path.lower().endswith(".czi"):
+        images, _ = load_images([path], czi_options or [0, 20], progress=lambda m: None)
+        if not images:
+            raise UserError("The .czi file has no image data.")
+        raw = images[0]
+    else:
+        raw = cv2.imread(path, cv2.IMREAD_COLOR)
+        if raw is None:
+            raise UserError("%s could not be read as an image." % os.path.basename(path))
+        if np.array_equal(raw[:, :, 0], raw[:, :, 1]) and np.array_equal(raw[:, :, 1], raw[:, :, 2]):
+            raw = raw[:, :, 0]  # a grayscale file
+    suggestion, reason = classify_image_type(prepare_image(raw))
+    settings = dict(settings)
+    kind = settings.get("image type") or suggestion or "inverted"
+    settings["image type"] = kind
+    settings["preprocess"] = kind != "preprocessed"
+    channel = settings.get("colour channel", "grayscale")
+
+    steps = [("1. Original\nas loaded", raw)]
+    current = raw
+    if kind == "normal":
+        current = invert_image(raw)
+        steps.append(("%d. Inverted\nfirst step, vessels now bright" % (len(steps) + 1), current))
+    if np.ndim(current) == 3:
+        current = prepare_image(current, None, channel)
+        name = "Grayscale" if channel == "grayscale" else channel.capitalize() + " channel"
+        steps.append(("%d. %s\nsingle channel analyzed" % (len(steps) + 1, name), current))
+    seg = segment_with_settings(current, settings)
+    for text, image in preprocessing_steps(current, settings, seg)[1:]:
+        steps.append(("%d. %s" % (len(steps) + 1, text), image))
+    return suggestion, reason, steps
+
+
 def analyze_images(images_to_analyze, file_names, settings, out_dir):
     """Segment every image and save img / label / vessel_labels pngs.
 
@@ -225,6 +355,11 @@ def analyze_images(images_to_analyze, file_names, settings, out_dir):
         with stage("saving img and label pngs"):
             cv2.imwrite(os.path.join(folder, "img" + suffix + ".png"), to_uint8(im))
             cv2.imwrite(os.path.join(folder, "label" + suffix + ".png"), seg * 200)
+        with stage("saving labelled image_check png"):
+            cv2.imwrite(
+                os.path.join(folder, "image_check" + suffix + ".png"),
+                labelled_panels(preprocessing_steps(im, settings, seg)),
+            )
         with stage("building labelled vessel image"):
             labelled = make_labelled_image(im, seg)
             cv2.imwrite(
@@ -286,8 +421,13 @@ def run_analysis(cfg, confirm=None):
     log("output : %s" % output_path)
     log("found %d file(s) to analyze" % len(files))
 
-    os.makedirs(output_path, exist_ok=True)
     settings = make_segmentation_settings(cfg["fields"])
+    if not settings["image type"]:
+        raise UserError(
+            "Choose the image type (normal, inverted or pre-processed) under "
+            "Image preprocessing before running. Check image... can suggest one."
+        )
+    os.makedirs(output_path, exist_ok=True)
     params = list(cfg["params"])
     czi_options = None
     if is_czi:
@@ -303,10 +443,16 @@ def run_analysis(cfg, confirm=None):
         log("settings saved to %s" % os.path.join(output_path, "settings.data"))
 
     log("settings: %s" % {k: (_sigma_text(v) if isinstance(v, range) else v) for k, v in settings.items()})
+    log("image type: %s" % IMAGE_TYPE_LABELS[settings["image type"]])
+    if settings["image type"] == "normal":
+        log("  each image is inverted first, before any other preprocessing")
     log("measuring: %s" % (", ".join(params) or "nothing"))
     log("loading images ...")
     try:
-        images, names = load_images(files, czi_options)
+        images, names = load_images(
+            files, czi_options, image_type=settings["image type"],
+            colour_channel=settings["colour channel"],
+        )
     except ValueError as err:  # e.g. channel does not exist
         raise UserError(str(err))
     if not images:

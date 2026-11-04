@@ -11,6 +11,21 @@ from ._fast import _filter_workers, _parallel_map
 from .logs import stage
 
 
+# What the user says the input image is. The rest of the pipeline expects
+# bright vessels on a dark background, so "normal" photos are inverted first.
+IMAGE_TYPE_CHOICES = ["normal", "inverted", "preprocessed"]
+
+
+IMAGE_TYPE_LABELS = {
+    "normal": "Normal photo (dark vessels on a light background)",
+    "inverted": "Inverted / fluorescence (bright vessels on a dark background)",
+    "preprocessed": "Pre-processed (bright vessels, background already removed)",
+}
+
+
+COLOUR_CHANNEL_CHOICES = ["grayscale", "green", "red", "blue"]
+
+
 def segment_image(
     im,
     im_filter="meijering",
@@ -21,10 +36,13 @@ def segment_image(
     thresh=40,
     preprocess=True,
     multi_scale=False,
+    clahe=False,
+    speck_size=0,
+    mask_outside=False,
 ):
-    if preprocess:
-        with stage("preprocessing (background subtraction, median blur)"):
-            im = preprocess_seg(im)
+    im, outside = preprocess_for_segmentation(
+        im, preprocess, clahe, speck_size, mask_outside
+    )
 
     with stage("vessel enhancement filter: %s, sigma %s" % (im_filter, sigma1)):
         norm = normalize_contrast(_enhance(im, im_filter, sigma1)).astype(
@@ -41,11 +59,141 @@ def segment_image(
 
         kernel = np.ones((6, 6), np.uint8)
         label = cv2.morphologyEx(enhanced_label, cv2.MORPH_OPEN, kernel)
+        if outside is not None:
+            # the sample edge itself gives a ridge response, so keep a margin
+            margin = cv2.dilate(outside.astype(np.uint8), disk(8).astype(np.uint8))
+            label[margin > 0] = 0
 
     with stage("filling holes < %s px and removing objects < %s px" % (hole_size, ditzle_size)):
         label = fill_holes(label, hole_size)
         label = remove_small_objects(label, ditzle_size)
     return label
+
+
+def preprocess_for_segmentation(
+    im, preprocess=True, clahe=False, speck_size=0, mask_outside=False
+):
+    """Everything segment_image does before the vessel filter.
+
+    Returns (image for the filter, boolean mask of the area outside the
+    sample or None when mask_outside is off).
+    """
+    outside = None
+    if mask_outside:
+        with stage("masking the area outside the sample"):
+            outside = outside_sample_mask(im)
+            im = fill_outside(im, outside)
+    if preprocess:
+        steps = ["background subtraction", "median blur"]
+        if speck_size:
+            steps.insert(0, "dark speck removal r=%d" % speck_size)
+        if clahe:
+            steps.insert(len(steps) - 2, "CLAHE")
+        with stage("preprocessing (%s)" % ", ".join(steps)):
+            im = preprocess_seg(im, clahe=clahe, speck_size=speck_size)
+    return im, outside
+
+
+def invert_image(image):
+    """Swap dark and light, keeping the value range (the first preprocessing step
+    for normal photos, so vessels become bright like in fluorescence images)."""
+    image = np.asarray(image)
+    if image.dtype.kind in "ui":
+        return np.iinfo(image.dtype).max - image
+    return np.max(image) + np.min(image) - image
+
+
+def prepare_image(raw, image_type=None, colour_channel="grayscale"):
+    """Turn a loaded image into the single-channel image that is analyzed.
+
+    Inversion is done first, on the untouched (colour) image, before any other
+    change; then the image is reduced to grayscale or one colour channel.
+    """
+    image = np.asarray(raw)
+    if image_type == "normal":
+        image = invert_image(image)
+    if image.ndim == 3:
+        if image.shape[2] == 4:  # drop alpha
+            image = image[:, :, :3]
+        if colour_channel in ("blue", "green", "red"):
+            image = image[:, :, ("blue", "green", "red").index(colour_channel)]
+        else:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return np.ascontiguousarray(image)
+
+
+def outside_sample_mask(image, min_fraction=0.005):
+    """Pixels outside the sample: near-black or near-white regions that touch
+    the image border (e.g. the dark surround of a cropped photo)."""
+    im = cv2.medianBlur(normalize_contrast(image).astype(np.uint8), 9)
+    outside = np.zeros(im.shape, dtype=bool)
+    for candidate in (im <= 12, im >= 243):
+        _, labels, stats, _ = cv2.connectedComponentsWithStats(
+            candidate.astype(np.uint8)
+        )
+        touching = np.unique(
+            np.concatenate([labels[0], labels[-1], labels[:, 0], labels[:, -1]])
+        )
+        big = [n for n in touching if n and stats[n, 4] >= min_fraction * im.size]
+        outside |= np.isin(labels, big)
+    return outside
+
+
+def fill_outside(image, outside):
+    """Replace the outside area with the sample's median so its edge does not
+    look like a vessel to the background subtraction and filters."""
+    if not outside.any() or outside.all():
+        return image
+    image = np.array(image, copy=True)
+    image[outside] = np.median(image[~outside])
+    return image
+
+
+def remove_dark_specks(image, radius):
+    """Grayscale closing: fills dark specks (dust, debris) narrower than
+    2 * radius that would otherwise break bright vessels apart."""
+    kernel = disk(radius).astype(np.uint8)
+    return cv2.morphologyEx(image, cv2.MORPH_CLOSE, kernel)
+
+
+def classify_image_type(image):
+    """Guess whether an image is normal, inverted or pre-processed.
+
+    Returns (image type, explanation). Compares bright-ridge and dark-ridge
+    filter responses inside the sample; a pre-processed image additionally has
+    a near-black background and a contrast stretch that saturates the vessels.
+    """
+    im = normalize_contrast(image).astype(np.uint8)
+    scale = 512 / max(im.shape)
+    if scale < 1:
+        im = cv2.resize(im, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    outside = outside_sample_mask(im)
+    inside = cv2.dilate(outside.astype(np.uint8), disk(6).astype(np.uint8)) == 0
+    if inside.sum() < 0.05 * im.size:
+        inside = np.ones(im.shape, dtype=bool)
+    im = fill_outside(im, outside).astype(np.float64) / 255
+    bright = np.percentile(sato(im, sigmas=[1, 2, 3], black_ridges=False)[inside], 95)
+    dark = np.percentile(sato(im, sigmas=[1, 2, 3], black_ridges=True)[inside], 95)
+    ratio = bright / max(dark, 1e-9)
+    values = im[inside]
+    median, saturated = np.median(values), np.mean(values >= 250 / 255)
+
+    if ratio < 0.95:
+        return "normal", (
+            "vessels look darker than the background (bright/dark ridge "
+            "ratio %.2f)" % ratio
+        )
+    if ratio > 1.05 and median <= 0.3 and saturated >= 0.03:
+        return "preprocessed", (
+            "bright vessels on a near-black background with a contrast "
+            "stretch (median %.0f, %.0f%% saturated)" % (median * 255, saturated * 100)
+        )
+    if ratio > 1.05:
+        return "inverted", (
+            "vessels look brighter than the background (bright/dark ridge "
+            "ratio %.2f)" % ratio
+        )
+    return None, "vessel polarity is unclear (bright/dark ridge ratio %.2f)" % ratio
 
 
 def preprocess_seg(
@@ -55,8 +203,16 @@ def preprocess_seg(
     upper_lim=255,
     lower_lim=0,
     bright_background=False,
+    clahe=False,
+    speck_size=0,
 ):
     image = normalize_contrast(image)
+    if speck_size or clahe:
+        image = image.astype(np.uint8)
+    if speck_size:
+        image = remove_dark_specks(image, speck_size)
+    if clahe:
+        image = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(image)
 
     image = subtract_background(
         image, radius=radius, light_bg=bright_background

@@ -1,12 +1,15 @@
 """Segmentation settings: defaults and parsing of the form entries."""
 
-from .segmentation import segment_image
+from .segmentation import COLOUR_CHANNEL_CHOICES, IMAGE_TYPE_CHOICES, segment_image
 
 
 def make_segmentation_settings(settings_list):
-    """Turn the 8 values from the settings form into a settings dict.
+    """Turn the values from the settings form (in SETTINGS_ORDER) into a
+    settings dict.
 
-    Blank or invalid entries fall back to DEFAULT_SEGMENTATION_SETTINGS.
+    Blank or invalid entries fall back to DEFAULT_SEGMENTATION_SETTINGS, so the
+    original 8-value lists still work. The image type has no default: it stays
+    None until the user picks one.
     """
     defaults = DEFAULT_SEGMENTATION_SETTINGS
     raw = list(settings_list or [])
@@ -39,20 +42,41 @@ def make_segmentation_settings(settings_list):
     settings["multi scale"] = _parse_yes_no(
         entered["multi scale"], defaults["multi scale"]
     )
+    image_type = str(entered["image type"] or "").strip().lower()
+    settings["image type"] = image_type if image_type in IMAGE_TYPE_CHOICES else None
+    if settings["image type"]:
+        # a pre-processed image skips the Vessel Metrics preprocessing
+        settings["preprocess"] = settings["image type"] != "preprocessed"
+    channel = str(entered["colour channel"]).strip().lower()
+    settings["colour channel"] = (
+        channel if channel in COLOUR_CHANNEL_CHOICES else defaults["colour channel"]
+    )
+    settings["clahe"] = _parse_yes_no(entered["clahe"], defaults["clahe"])
+    settings["speck size"] = _parse_int(
+        entered["speck size"], defaults["speck size"], 0, 50
+    )
+    settings["mask outside"] = _parse_yes_no(
+        entered["mask outside"], defaults["mask outside"]
+    )
     return settings
 
 
 def segment_with_settings(im, settings):
+    s = dict(DEFAULT_SEGMENTATION_SETTINGS)
+    s.update(settings)  # settings saved before the preprocessing options
     return segment_image(
         im,
-        im_filter=settings["filter"],
-        sigma1=settings["sigma1"],
-        sigma2=settings["sigma2"],
-        hole_size=settings["hole size"],
-        ditzle_size=settings["ditzle size"],
-        thresh=settings["threshold"],
-        preprocess=settings["preprocess"],
-        multi_scale=settings["multi scale"],
+        im_filter=s["filter"],
+        sigma1=s["sigma1"],
+        sigma2=s["sigma2"],
+        hole_size=s["hole size"],
+        ditzle_size=s["ditzle size"],
+        thresh=s["threshold"],
+        preprocess=s["preprocess"],
+        multi_scale=s["multi scale"],
+        clahe=s["clahe"],
+        speck_size=s["speck size"],
+        mask_outside=s["mask outside"],
     )
 
 
@@ -65,6 +89,11 @@ DEFAULT_SEGMENTATION_SETTINGS = {
     "ditzle size": 500,
     "preprocess": True,
     "multi scale": False,
+    "image type": None,
+    "colour channel": "grayscale",
+    "clahe": False,
+    "speck size": 0,
+    "mask outside": False,
 }
 
 
@@ -77,6 +106,11 @@ SETTINGS_ORDER = [
     "ditzle size",
     "preprocess",
     "multi scale",
+    "image type",
+    "colour channel",
+    "clahe",
+    "speck size",
+    "mask outside",
 ]
 
 
@@ -138,4 +172,9 @@ def settings_to_fields(settings):
         str(s["ditzle size"]),
         "yes" if s["preprocess"] else "no",
         "yes" if s["multi scale"] else "no",
+        s["image type"] or "",
+        str(s["colour channel"]),
+        "yes" if s["clahe"] else "no",
+        str(s["speck size"]),
+        "yes" if s["mask outside"] else "no",
     ]
