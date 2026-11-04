@@ -26,14 +26,14 @@ Enter these values in the graphical interface:
 | Sigma 2 | `10 20 5` |
 | Hole size | `50` |
 | Ditzle size | `500` |
-| Image type | your choice (required), see below |
+| Image type | automatic, or optional override; see below |
 | Multi scale | `no` |
 
 This preset is appropriate when vessels have broadly similar widths and reasonable contrast.
 
 ## Choosing the image type and photo preprocessing
 
-Choose the image type before anything else, then press **Check image...** to confirm it: the software labels the image and previews each step.
+Image type is optional. Leave it unset to let the software classify the image automatically, or choose an override when you know the image polarity. Press **Check image...** to confirm the classification and preview every step.
 
 * **Normal photo** (e.g. a yolk-sac photo with dark red vessels): inverted first, then processed.
 * **Inverted / fluorescence**: bright vessels on a dark background.

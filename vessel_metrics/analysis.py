@@ -423,10 +423,25 @@ def run_analysis(cfg, confirm=None):
 
     settings = make_segmentation_settings(cfg["fields"])
     if not settings["image type"]:
-        raise UserError(
-            "Choose the image type (normal, inverted or pre-processed) under "
-            "Image preprocessing before running. Check image... can suggest one."
-        )
+        # Image type is an optional override. Use the same classifier as the
+        # preview so processing choices can be made without first selecting a
+        # polarity/type radio button.
+        if is_czi:
+            kind = "inverted"
+            reason = "CZI polarity is not classified before loading"
+        else:
+            raw = cv2.imread(files[0], cv2.IMREAD_COLOR)
+            if raw is None:
+                raise UserError("%s could not be read as an image." %
+                                os.path.basename(files[0]))
+            kind, reason = classify_image_type(prepare_image(raw))
+            if kind is None:
+                kind = "inverted"
+                reason = reason + "; using the non-inverted default"
+        settings["image type"] = kind
+        settings["preprocess"] = kind != "preprocessed"
+        log("image type selected automatically: %s (%s)" %
+            (IMAGE_TYPE_LABELS[kind], reason))
     os.makedirs(output_path, exist_ok=True)
     params = list(cfg["params"])
     czi_options = None

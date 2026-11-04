@@ -199,13 +199,13 @@ def launch_gui():
     entry(src, out_var, 34).grid(row=4, column=0, columnspan=2, sticky="we")
     button(src, "Browse...", browse_out).grid(row=4, column=2, padx=(6, 0))
 
-    prep = section(left, "2. Image preprocessing (choose before running)")
+    prep = section(left, "2. Image preprocessing")
     prep.pack(fill="x", pady=(0, 8))
-    label(prep, "Image type (required):").grid(row=0, column=0, columnspan=2, sticky="w")
+    label(prep, "Image type (optional override):").grid(row=0, column=0, columnspan=2, sticky="w")
     for i, kind in enumerate(IMAGE_TYPE_CHOICES, start=1):
         radio(prep, IMAGE_TYPE_LABELS[kind], type_var, kind).grid(
             row=i, column=0, columnspan=2, sticky="w", padx=(10, 0))
-    type_hint = tk.Label(prep, bg=BG, fg=WARN_FG, font=font, anchor="w", justify="left")
+    type_hint = tk.Label(prep, bg=BG, fg=MUTED, font=font, anchor="w", justify="left")
     type_hint.grid(row=4, column=0, columnspan=2, sticky="w", pady=(2, 0))
     label(prep, "Colour channel:").grid(row=5, column=0, sticky="w", pady=(6, 0))
     crow = frame(prep)
@@ -338,10 +338,12 @@ def launch_gui():
         }
 
     def refresh_type(*_):
-        """Run needs an image type; pre-processed images skip CLAHE and specks."""
+        """Keep optional image preparation overrides independent of run state."""
         chosen = type_var.get() in IMAGE_TYPE_CHOICES
-        type_hint.config(text="" if chosen else "Choose an image type to enable Run analysis.")
-        run_btn.config(state="normal" if chosen else "disabled")
+        type_hint.config(
+            text="" if chosen else
+            "Leave unset to use the image check suggestion automatically."
+        )
         state = "disabled" if type_var.get() == "preprocessed" else "normal"
         clahe_box.config(state=state)
         speck_entry.config(state=state)
